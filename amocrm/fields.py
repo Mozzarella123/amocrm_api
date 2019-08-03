@@ -15,7 +15,10 @@ __all__ = ['CustomField', u'EnumCustomField', 'ForeignField', 'ManyForeignField'
 logger = logging.getLogger('amocrm')
 CHOICE_TYPE = '4'
 MULTI_LIST_TYPE = '5'
-
+TEXT = '1'
+NUMERIC = '2'
+CHECKBOX = '3'
+DATE = '6'
 
 class _BaseField(object):
     def __init__(self, field=None, required=False):
@@ -89,11 +92,6 @@ class _BaseForeignField(_Field):
     def __init__(self, object_type=None, field=None, required=False):
         super(_BaseForeignField, self).__init__(field, required=required)
         self.object_type = object_type
-
-    def __get__(self, instance, _=None):
-        if instance._init():
-            instance._fields_data[self.field] = None
-        return super(_BaseForeignField, self).__get__(instance, _)
 
 
 class ForeignField(_BaseForeignField):
@@ -199,9 +197,8 @@ class Owner(_Field):
 
     def on_get(self, data, instance):
         if data and str(data).isdigit():
-            owners = [item for item in instance.objects.users if str(item.id) == str(data)]
-            if owners:
-                return owners.pop()
+            return [item for item in instance.objects.users if str(item.id) == str(data)].pop()
+        return data
 
     def on_set(self, value, instance):
         if isinstance(value, six.string_types):
@@ -230,9 +227,10 @@ class CustomField(object):
             custom_field_info = instance.objects._custom_fields[self.custom_field]
             self._id = _id = custom_field_info['id']
             _data = list(_data.values()) if isinstance(_data, dict) else _data
-            _data = [item['values'] for item in _data if item['id'] == _id]
+            _data = [item for item in _data if item['id'] == int(_id)]
 
             _data = _data[-1] if _data else None
+            _data = _data['values'] if _data else None
             _data = list(_data.values()) if isinstance(_data, dict) else _data
             if custom_field_info['type_id'] == MULTI_LIST_TYPE and _data and not isinstance(_data[0], dict):
                 _data = [{'value': item[1]} for item in custom_field_info['enums'].items()
@@ -241,8 +239,14 @@ class CustomField(object):
             if custom_field_info['type_id'] != MULTI_LIST_TYPE and custom_field_info.get(u'multiple') != u'Y' and _data:
                 _data = _data.pop()
 
-            if _data in ['0', '1']:
+            if custom_field_info['type_id'] == NUMERIC and _data:
+                _data = float(_data)
+
+            if custom_field_info['type_id'] == CHECKBOX and _data:
                 _data = bool(int(_data))
+
+            if custom_field_info['type_id'] == DATE and _data:
+                _data =  datetime.strptime(_data, '%Y-%m-%d %H:%M:%S')
 
             instance._fields_data[self.field] = _data
         return instance._fields_data[self.field]

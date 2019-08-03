@@ -5,7 +5,6 @@ import json
 import time
 import copy
 from datetime import datetime
-import logging
 
 import six
 from pytz import utc, timezone
@@ -19,9 +18,6 @@ __all__ = ['BaseCompany', 'BaseContact', 'BaseLead',
            'CompanyNote', 'ContactNote', 'LeadNote', 'TaskNote']
 KIEV = 'Europe/Kiev'
 MOSCOW = 'Europe/Moscow'
-
-
-logger = logging.getLogger(__name__)
 
 
 class _ModelMeta(type):
@@ -91,25 +87,15 @@ class _BaseModel(six.with_metaclass(_ModelMeta)):
         return self.__getattribute__(item)
 
     def __getattribute__(self, name):
-        get_attr = super(_BaseModel, self).__getattribute__
-        value = get_attr(name)
-        if (value is None and not get_attr('_loaded') and
-                    name != 'id' and
-                    get_attr('_data').get('id', None) is not None and
-                    name in get_attr('_fields') and
-                    get_attr('_fields')[name].field not in get_attr('_changed_fields')):
-            get_attr('_init')()
-            value = get_attr(name)
-        return value
-
-    get = __getitem__
-
-    def _init(self):
-        if not self._loaded and self.id is not None:
+        value = super(_BaseModel, self).__getattribute__(name)
+        if (value is None and not self._loaded and name != 'id' and self._data.get('id', None) is not None and name in self._fields
+                and self._fields[name].field not in self._changed_fields):
             amo_data = self.objects.get(self.id)  # trying to get info from crm
             if amo_data:
                 self.__init__(amo_data._data, _loaded=True)
-                return True
+        return value or super(_BaseModel, self).__getattribute__(name)
+
+    get = __getitem__
 
     def _save_fk(self):
         for name, field in self._fields.items():
@@ -132,14 +118,7 @@ class _BaseModel(six.with_metaclass(_ModelMeta)):
             self._data['id'] = self.id
         if self.date_create is None:
             self._data['date_create'] = int(time.time())
-        current_last_modified = self._data.get('last_modified')
-        now = int(time.time())
-        if current_last_modified and current_last_modified > now:
-            # Воркэраунд для ситуации, когда last_modified объекта на сервере больше, чем наше время
-            logger.debug('last_modified workaround old last_modified=%s > now=%s', current_last_modified, now)
-            self._data['last_modified'] = current_last_modified + 1
-        else:
-            self._data['last_modified'] = now
+        self._data['last_modified'] = int(time.time())
         for name, field in self._fields.items():
             if field.field in self._required:
                 value = getattr(self, name)
@@ -233,7 +212,6 @@ class _AbstractNamedModel(_BaseModel):
 
 
 class BaseCompany(_AbstractNamedModel):
-    contact_model = None
     type = fields._ConstantField('type', 'company')
 
     objects = CompanyManager()
@@ -251,27 +229,9 @@ class BaseCompany(_AbstractNamedModel):
         note.save(update_if_exists=False)
         return note
 
-    @property
-    def contacts(self):
-        return (
-            (self.contact_model or BaseContact).objects.get(_id)
-            for _id in set([
-                item['to_id']
-                for item in self.objects._get_linkslist(
-                    from_type='company',
-                    from_ids=[self.id],
-                    to_type='contact',
-                )
-                if item['to'] == 'contacts'
-            ])
-        )
 
-
-class BaseLead(_BaseModel):
+class BaseLead(_AbstractNamedModel):
     contact_model = None
-
-    name = fields._Field('name', required=False)
-    tags = fields._TagsField('tags', 'name')
     status = fields._StatusTypeField(required=True)
     pipeline = fields._TypeField('pipeline_id', choices='pipelines', required=False)
     company = fields.ForeignField(BaseCompany, 'linked_company_id',
@@ -302,12 +262,12 @@ class BaseLead(_BaseModel):
     @property
     def statuses(self):
         if self.pipeline and self.objects.pipelines[self.pipeline]:
-            return {item.get('name', item.get('id')): item for item in self.objects.pipelines[self.pipeline]['statuses'].values()}
+            return {item.get('id', item.get('name')): item for item in self.objects.pipelines[self.pipeline]['statuses'].values()}
         return self.objects.leads_statuses
 
     @property
     def contacts(self):
-        return ((self.contact_model or BaseContact).objects.get(_id) for _id in
+        return (self.contact_model.objects.get(_id) for _id in
                 set([item['contact_id'] for item in self.objects._get_links(leads=[self.id])]))
 
 
@@ -346,10 +306,10 @@ class BaseContact(_AbstractNamedModel):
 
 
 class _AbstractTaskModel(_BaseModel):
-    CALL = 'Звонок'
-    MEETING = 'Встреча'
-    LETTER = 'Письмо'
-    FOLLOW = 'Follow-up'
+    CALL = u'Звонок'
+    MEETING = u'Встреча'
+    LETTER = u'Письмо'
+    FOLLOW = u'Follow-up'
 
     type = fields._TypeField('task_type', 'task_types', required=True)
     text = fields._Field('text', required=True)
@@ -369,7 +329,7 @@ class _AbstractTaskModel(_BaseModel):
 
     @property
     def is_meeting(self):
-        return self.type == 'Встреча'
+        return self.type == u'Встреча'
 
     @property
     def is_full_day(self):
@@ -416,7 +376,7 @@ class _AbstractNoteModel(_BaseModel):
         except ValueError:
             res = None
         if not isinstance(res, dict):
-            res = {'TEXT': self.text}
+            res = {u'TEXT': self.text}
         return res
 
 
